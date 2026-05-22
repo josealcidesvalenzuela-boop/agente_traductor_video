@@ -5,6 +5,10 @@ from pathlib import Path
 
 import srt
 from faster_whisper import WhisperModel
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+_console = Console()
 
 
 def transcribe(video_path: str, language: str | None = None) -> str:
@@ -15,35 +19,38 @@ def transcribe(video_path: str, language: str | None = None) -> str:
     force_cpu = os.getenv("WHISPER_DEVICE", "").lower() == "cpu"
     device, compute_type = ("cpu", "int8") if force_cpu else ("cuda", "float16")
 
-    try:
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
-    except (RuntimeError, OSError):
-        if device == "cuda":
-            print("[transcribe] CUDA no disponible, usando CPU")
-            device, compute_type = "cpu", "int8"
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=_console) as prog:
+        t_load = prog.add_task(f"Cargando {model_name} [{device}]…", total=None)
+        try:
             model = WhisperModel(model_name, device=device, compute_type=compute_type)
-        else:
-            raise
+        except (RuntimeError, OSError):
+            if device == "cuda":
+                prog.update(t_load, description="CUDA no disponible, cargando en CPU…")
+                device, compute_type = "cpu", "int8"
+                model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            else:
+                raise
+        prog.update(t_load, description=f"[green]Modelo listo [{device}]")
 
-    print(f"[transcribe] model={model_name} device={device}")
+        lang = None if language in (None, "auto") else language
+        segments_iter, info = model.transcribe(video_path, language=lang, beam_size=5)
 
-    lang = None if language in (None, "auto") else language
-    segments_iter, info = model.transcribe(video_path, language=lang, beam_size=5)
-
-    subs = []
-    for seg in segments_iter:
-        subs.append(
-            srt.Subtitle(
-                index=len(subs) + 1,
-                start=timedelta(seconds=seg.start),
-                end=timedelta(seconds=seg.end),
-                content=seg.text.strip(),
+        t_seg = prog.add_task("Transcribiendo…  0 segmentos", total=None)
+        subs = []
+        for seg in segments_iter:
+            subs.append(
+                srt.Subtitle(
+                    index=len(subs) + 1,
+                    start=timedelta(seconds=seg.start),
+                    end=timedelta(seconds=seg.end),
+                    content=seg.text.strip(),
+                )
             )
-        )
+            prog.update(t_seg, description=f"Transcribiendo…  {len(subs)} segmentos")
+        prog.update(t_seg, description=f"[green]{len(subs)} segmentos detectados (idioma={info.language})")
 
     output_path = Path(video_path).with_suffix(".srt")
     output_path.write_text(srt.compose(subs), encoding="utf-8")
-
     elapsed = time.time() - t0
-    print(f"[transcribe] {len(subs)} subtítulos detectados (idioma={info.language}) → {output_path} ({elapsed:.1f}s)")
+    _console.print(f"  → [bold]{output_path.name}[/] ({elapsed:.1f}s)")
     return str(output_path)
