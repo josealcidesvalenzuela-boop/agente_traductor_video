@@ -1,15 +1,23 @@
-import os
 from pathlib import Path
 
 import ollama
 import srt
-from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
-_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder")
+from config import OLLAMA_HOST, OLLAMA_MODEL
+
+_console = Console()
 _BATCH_SIZE = 20
 
 
-def _translate_batch(texts: list[str], source: str, target: str, system: str) -> list[str]:
+def _translate_batch(
+    client: ollama.Client,
+    texts: list[str],
+    source: str,
+    target: str,
+    system: str,
+) -> list[str]:
     numbered = "\n".join(f"{i + 1}|||{t}" for i, t in enumerate(texts))
     prompt = (
         f"Translate each subtitle line from {source} to {target}. "
@@ -17,10 +25,8 @@ def _translate_batch(texts: list[str], source: str, target: str, system: str) ->
         "Do not alter the numbers or the ||| separator.\n\n"
         f"{numbered}"
     )
-    host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    client = ollama.Client(host=host)
     response = client.chat(
-        model=_MODEL,
+        model=OLLAMA_MODEL,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
@@ -60,16 +66,17 @@ def translate(
         "Preserve names, technical terms, and formatting."
     )
 
+    client = ollama.Client(host=OLLAMA_HOST)
     with Progress(TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn()) as prog:
-        task = prog.add_task(f"Traduciendo {source_lang}→{target_lang} [{_MODEL}]", total=total_batches)
+        task = prog.add_task(f"Traduciendo {source_lang}→{target_lang} [{OLLAMA_MODEL}]", total=total_batches)
         for i in range(0, len(subs), _BATCH_SIZE):
             batch = subs[i : i + _BATCH_SIZE]
-            translated = _translate_batch([s.content for s in batch], source_lang, target_lang, system)
+            translated = _translate_batch(client, [s.content for s in batch], source_lang, target_lang, system)
             for sub, text in zip(batch, translated):
                 sub.content = text
             prog.advance(task)
 
     out = Path(output_path) if output_path else path.with_stem(path.stem + "_translated")
     out.write_text(srt.compose(subs), encoding="utf-8")
-    print(f"  → {out.name}")
+    _console.print(f"  → [bold]{out.name}[/]")
     return str(out)

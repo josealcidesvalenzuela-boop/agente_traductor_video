@@ -1,5 +1,6 @@
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -16,18 +17,29 @@ app = typer.Typer(no_args_is_help=True, help="Pipeline de transcripción, traduc
 console = Console()
 
 
-def _make_run_outputs(video: Path, run_id: str) -> dict[str, Path]:
+# ── Run path management ───────────────────────────────────────────────────────
+
+
+@dataclass
+class RunPaths:
+    srt: Path
+    translated_srt: Path
+    tts_dir: Path
+    dubbed: Path
+
+
+def _make_run_paths(video: Path, run_id: str) -> RunPaths:
     p, s = video.parent, video.stem
-    return {
-        "srt":            p / f"{s}_{run_id}.srt",
-        "translated_srt": p / f"{s}_{run_id}_translated.srt",
-        "tts_dir":        p / f"{s}_{run_id}_tts",
-        "dubbed":         p / f"{s}_{run_id}_dubbed.mp4",
-    }
+    return RunPaths(
+        srt=p / f"{s}_{run_id}.srt",
+        translated_srt=p / f"{s}_{run_id}_translated.srt",
+        tts_dir=p / f"{s}_{run_id}_tts",
+        dubbed=p / f"{s}_{run_id}_dubbed.mp4",
+    )
 
 
-def _find_latest_outputs(video: Path) -> dict[str, Path] | None:
-    """Return output paths of the most recent run for this video, or None if no prior run exists."""
+def _find_latest_run(video: Path) -> RunPaths | None:
+    """Return output paths of the most recent run for this video, or None."""
     dubbed_files = sorted(
         video.parent.glob(f"{video.stem}_*_dubbed.mp4"),
         key=lambda f: f.stat().st_mtime,
@@ -35,10 +47,12 @@ def _find_latest_outputs(video: Path) -> dict[str, Path] | None:
     )
     if not dubbed_files:
         return None
-    # Extract run_id from "{stem}_{run_id}_dubbed.mp4"
     inner = dubbed_files[0].stem[len(video.stem) + 1:]   # "20260522_143500_dubbed"
     run_id = inner[: inner.rfind("_dubbed")]               # "20260522_143500"
-    return _make_run_outputs(video, run_id) if run_id else None
+    return _make_run_paths(video, run_id) if run_id else None
+
+
+# ── Commands ──────────────────────────────────────────────────────────────────
 
 
 @app.command("run")
@@ -52,7 +66,7 @@ def run(
     tone: str = typer.Option("neutral", "--tone", help="Tono de traducción: neutral | formal | informal"),
     domain: str = typer.Option("general", "--domain", help="Dominio del contenido: general | technical | casual"),
     engine: Optional[str] = typer.Option(None, "--engine", help="Motor TTS: edge (nube) | kokoro (local). Default: env TTS_ENGINE o 'edge'"),
-    voice: Optional[str] = typer.Option(None, "--voice", help="Voz explícita para el motor seleccionado. Ver: main.py voices"),
+    voice: Optional[str] = typer.Option(None, "--voice", help="Voz explícita para el motor TTS. Ver: main.py voices"),
     force: bool = typer.Option(False, "--force", "-f", help="Reejecutar etapas aunque los archivos ya existan"),
 ):
     """Transcribe → Traduce → Sintetiza voz → Dobla el video."""
@@ -65,19 +79,18 @@ def run(
     from pipeline.tts import generate_audio
     from pipeline.merge import merge
 
-    # On resume (no --force), reuse the most recent run's files
-    resume = not force and _find_latest_outputs(video)
-    out = resume or _make_run_outputs(video, run_id)
+    resume = not force and _find_latest_run(video)
+    out = resume or _make_run_paths(video, run_id)
     srt_path: str | None = str(srt) if srt else None
 
     # Etapa 1 — Transcripción
     if only in (None, "transcribe") and srt_path is None:
         console.print("\n[bold yellow]▶ Etapa 1/4[/]  Transcripción (Faster-Whisper)…")
-        if resume and out["srt"].exists():
-            console.print(f"  [dim]↩ Reutilizando {out['srt'].name} (--force para reejecutar)[/]")
-            srt_path = str(out["srt"])
+        if resume and out.srt.exists():
+            console.print(f"  [dim]↩ Reutilizando {out.srt.name} (--force para reejecutar)[/]")
+            srt_path = str(out.srt)
         else:
-            srt_path = transcribe(str(video), language=None if source == "auto" else source, output_path=str(out["srt"]))
+            srt_path = transcribe(str(video), language=None if source == "auto" else source, output_path=str(out.srt))
         if only == "transcribe":
             console.print(f"[green]✓[/] {srt_path}")
             return
@@ -86,13 +99,13 @@ def run(
     translated_srt: str | None = None
     if only in (None, "translate"):
         console.print("\n[bold yellow]▶ Etapa 2/4[/]  Traducción (Ollama)…")
-        if resume and out["translated_srt"].exists():
-            console.print(f"  [dim]↩ Reutilizando {out['translated_srt'].name} (--force para reejecutar)[/]")
-            translated_srt = str(out["translated_srt"])
+        if resume and out.translated_srt.exists():
+            console.print(f"  [dim]↩ Reutilizando {out.translated_srt.name} (--force para reejecutar)[/]")
+            translated_srt = str(out.translated_srt)
         else:
             translated_srt = translate(
                 srt_path, source_lang=source, target_lang=target,
-                tone=tone, domain=domain, output_path=str(out["translated_srt"]),
+                tone=tone, domain=domain, output_path=str(out.translated_srt),
             )
         if only == "translate":
             console.print(f"[green]✓[/] {translated_srt}")
@@ -103,8 +116,8 @@ def run(
     # Etapa 3 — Síntesis de voz
     audio_segments: list[tuple[float, str]] | None = None
     if only in (None, "tts"):
-        console.print("\n[bold yellow]▶ Etapa 3/4[/]  Síntesis de voz (Edge-TTS)…")
-        tts_dir = out["tts_dir"]
+        console.print("\n[bold yellow]▶ Etapa 3/4[/]  Síntesis de voz…")
+        tts_dir = out.tts_dir
         cached_segs = list(tts_dir.glob("seg_*.mp3")) + list(tts_dir.glob("seg_*.wav")) if tts_dir.exists() else []
         if resume and cached_segs:
             console.print(f"  [dim]↩ Reutilizando {tts_dir.name}/ (--force para reejecutar)[/]")
@@ -124,7 +137,7 @@ def run(
     # Etapa 4 — Unión audio+video
     if only in (None, "merge"):
         console.print("\n[bold yellow]▶ Etapa 4/4[/]  Unión audio+video (FFmpeg)…")
-        dubbed_path = str(output) if output else str(out["dubbed"])
+        dubbed_path = str(output) if output else str(out.dubbed)
         final = merge(str(video), audio_segments, output_path=dubbed_path)
         elapsed = time.time() - t_start
         console.print(Panel(f"[bold green]✓ Completado en {elapsed:.1f}s[/]\n{final}"))
@@ -142,15 +155,13 @@ def voices(
     if engine == "kokoro":
         from pipeline.tts import _KokoroEngine
 
-        eng = _KokoroEngine()
-        model = eng._get_model()
+        model = _KokoroEngine._get_model()
         names = model.get_voices()
         if lang:
             names = [n for n in names if n.startswith(lang.replace("-", "_").lower())]
         table = Table("Nombre", "Prefijo de idioma", title=f"Voces Kokoro{f' [{lang}]' if lang else ''}")
         for n in names:
-            prefix = n.split("_")[0]
-            table.add_row(n, prefix)
+            table.add_row(n, n.split("_")[0])
         console.print(table)
         console.print(f"\n[dim]Uso: --engine kokoro --voice NombreDeVoz[/]  ej: [bold]--engine kokoro --voice {names[0] if names else 'af_bella'}[/]")
     else:

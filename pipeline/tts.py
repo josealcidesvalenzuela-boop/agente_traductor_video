@@ -2,14 +2,20 @@ import asyncio
 import os
 import subprocess
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 import edge_tts
 import ffmpeg
 import srt as srt_lib
-from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
-# ── Default voices por idioma ─────────────────────────────────────────────────
+from config import TTS_ENGINE
+
+__all__ = ["generate_audio", "list_voices"]
+
+_console = Console()
+
+# ── Voice tables ──────────────────────────────────────────────────────────────
 
 _EDGE_VOICES: dict[str, str] = {
     "en": "en-US-JennyNeural",
@@ -35,7 +41,7 @@ _KOKORO_VOICES: dict[str, str] = {
     "zh": "zf_xiaobei",
 }
 
-# Kokoro lang codes (differ from ISO 639-1)
+# Kokoro uses its own language code scheme (differs from ISO 639-1)
 _KOKORO_LANG: dict[str, str] = {
     "en": "en-us",
     "es": "es",
@@ -48,38 +54,33 @@ _KOKORO_LANG: dict[str, str] = {
 
 _MAX_SPEED = 1.5
 
-
 # ── Audio helpers ─────────────────────────────────────────────────────────────
 
+
 def _audio_duration(path: str) -> float:
-    probe = ffmpeg.probe(path)
-    return float(probe["format"]["duration"])
+    return float(ffmpeg.probe(path)["format"]["duration"])
 
 
 def _adjust_speed(path: str, target_sec: float) -> None:
-    """Speed up audio to fit within target_sec. No-op if already shorter or ratio > _MAX_SPEED."""
+    """Speed up audio to fit within target_sec; no-op if already fits or ratio > _MAX_SPEED."""
     actual = _audio_duration(path)
     if actual <= target_sec:
         return
     speed = min(actual / target_sec, _MAX_SPEED)
-    if speed <= 2.0:
-        af = f"atempo={speed:.4f}"
-    else:
-        s1 = speed**0.5
-        af = f"atempo={s1:.4f},atempo={speed / s1:.4f}"
     tmp = path + ".tmp" + Path(path).suffix
     subprocess.run(
-        ["ffmpeg", "-y", "-i", path, "-filter:a", af, tmp],
+        ["ffmpeg", "-y", "-i", path, "-filter:a", f"atempo={speed:.4f}", tmp],
         capture_output=True,
         check=True,
     )
     os.replace(tmp, path)
 
 
-# ── TTS Engines ───────────────────────────────────────────────────────────────
+# ── TTS engines ───────────────────────────────────────────────────────────────
+
 
 class _EdgeEngine:
-    """Edge-TTS: cloud-based, requiere internet, salida MP3."""
+    """Cloud TTS via Microsoft Edge — requires internet, outputs MP3."""
 
     ext = "mp3"
 
@@ -87,12 +88,11 @@ class _EdgeEngine:
         return _EDGE_VOICES.get(lang, "en-US-JennyNeural")
 
     async def synth(self, text: str, voice: str, path: str) -> None:
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(path)
+        await edge_tts.Communicate(text, voice).save(path)
 
 
 class _KokoroEngine:
-    """Kokoro-ONNX: local, sin internet, salida WAV. Descarga modelo ~300 MB + voces al primer uso."""
+    """Local ONNX TTS via Kokoro — no internet after first download, outputs WAV."""
 
     ext = "wav"
     _instance = None
@@ -105,7 +105,7 @@ class _KokoroEngine:
         if dest.exists():
             return
         import urllib.request
-        print(f"[kokoro] Descargando {dest.name}…")
+        _console.print(f"[kokoro] Descargando {dest.name}…")
         tmp = Path(str(dest) + ".tmp")
         urllib.request.urlretrieve(url, str(tmp))
         tmp.rename(dest)
@@ -114,7 +114,6 @@ class _KokoroEngine:
     def _get_model(cls):
         if cls._instance is None:
             from kokoro_onnx import Kokoro
-
             cls._CACHE.mkdir(parents=True, exist_ok=True)
             model_path = cls._CACHE / "kokoro-v1.0.onnx"
             voices_path = cls._CACHE / "voices-v1.0.bin"
@@ -130,9 +129,7 @@ class _KokoroEngine:
         import soundfile as sf
         model = self._get_model()
         loop = asyncio.get_event_loop()
-        samples, sr = await loop.run_in_executor(
-            None, lambda: model.create(text, voice=voice, speed=1.0, lang=lang)
-        )
+        samples, sr = await loop.run_in_executor(None, lambda: model.create(text, voice=voice, speed=1.0, lang=lang))
         await loop.run_in_executor(None, lambda: sf.write(path, samples, sr))
 
 
@@ -143,6 +140,7 @@ def _build_engine(name: str) -> _EdgeEngine | _KokoroEngine:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 async def list_voices(lang_filter: str | None = None) -> list[dict]:
     """Return Edge-TTS voices, optionally filtered by language prefix (e.g. 'es', 'en-US')."""
@@ -159,23 +157,21 @@ def generate_audio(
     voice: str | None = None,
     engine: str | None = None,
 ) -> list[tuple[float, str]]:
-    """Generate one speed-adjusted audio file per subtitle segment.
+    """Generate one speed-adjusted audio clip per subtitle segment.
 
-    engine: 'edge' (default) or 'kokoro'. Falls back to TTS_ENGINE env var.
     Returns list of (start_sec, audio_path).
     """
-    engine_name = engine or os.getenv("TTS_ENGINE", "edge")
+    engine_name = engine or TTS_ENGINE
     eng = _build_engine(engine_name)
     selected_voice = voice or eng.default_voice(target_lang)
     kokoro_lang = _KOKORO_LANG.get(target_lang, "en-us")
 
     path = Path(srt_path)
     subs = list(srt_lib.parse(path.read_text(encoding="utf-8")))
-
     out_dir = Path(output_dir) if output_dir else path.parent / f"{path.stem}_tts"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"  engine={engine_name}  voz={selected_voice}")
+    _console.print(f"  engine={engine_name}  voz={selected_voice}")
 
     with Progress(TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn()) as prog:
         task = prog.add_task(f"Sintetizando [{engine_name}]", total=len(subs))
@@ -187,17 +183,13 @@ def generate_audio(
                     await eng.synth(sub.content, selected_voice, seg_path, lang=kokoro_lang)
                 else:
                     await eng.synth(sub.content, selected_voice, seg_path)
-                target_sec = (sub.end - sub.start).total_seconds()
-                _adjust_speed(seg_path, target_sec)
+                _adjust_speed(seg_path, (sub.end - sub.start).total_seconds())
                 prog.advance(task)
 
             await asyncio.gather(*[_synth_one(sub) for sub in subs])
 
         asyncio.run(_run_all())
 
-    segments = [
-        (sub.start.total_seconds(), str(out_dir / f"seg_{sub.index:04d}.{eng.ext}"))
-        for sub in subs
-    ]
-    print(f"  → {out_dir.name}/ ({len(segments)} archivos .{eng.ext})")
+    segments = [(sub.start.total_seconds(), str(out_dir / f"seg_{sub.index:04d}.{eng.ext}")) for sub in subs]
+    _console.print(f"  → {out_dir.name}/ ({len(segments)} archivos .{eng.ext})")
     return segments

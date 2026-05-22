@@ -7,14 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Local video dubbing pipeline with 4 stages:
 1. **Transcribe** — Faster-Whisper (local GPU) converts video audio to `.SRT`
 2. **Translate** — Ollama (local LLM) translates the `.SRT` preserving all timestamps
-3. **TTS** — Coqui-TTS or Edge-TTS synthesizes the translated text to audio
+3. **TTS** — Edge-TTS (cloud) or Kokoro-ONNX (local) synthesizes the translated text to audio
 4. **Merge** — FFmpeg combines the dubbed audio with the original video
 
 ## Stack
 
 - **Language**: Python 3.11+
 - **Package manager**: `uv` — use `uv run`, `uv add`, `uv sync` instead of `pip` or `python` directly
-- **Key deps**: `faster-whisper`, `ollama`, `TTS` (Coqui) or `edge-tts`, `ffmpeg-python`, `srt`
+- **Key deps**: `faster-whisper`, `ollama`, `edge-tts`, `kokoro-onnx`, `ffmpeg-python`, `srt`
 - **External tools**: FFmpeg must be installed and on PATH (`ffmpeg -version` to verify), Ollama must be running (`ollama serve`)
 
 ## Project Structure
@@ -22,11 +22,13 @@ Local video dubbing pipeline with 4 stages:
 ```
 agente_traductor_video/
 ├── pipeline/
+│   ├── __init__.py      # Windows CUDA DLL path setup
 │   ├── transcribe.py    # Stage 1: Faster-Whisper → .srt
 │   ├── translate.py     # Stage 2: Ollama → translated .srt
-│   ├── tts.py           # Stage 3: Coqui/Edge-TTS → audio segments
+│   ├── tts.py           # Stage 3: Edge-TTS / Kokoro → audio segments
 │   └── merge.py         # Stage 4: FFmpeg → final dubbed video
-├── main.py              # CLI entrypoint
+├── config.py            # All env var defaults (single source of truth)
+├── main.py              # CLI entrypoint (Typer) + RunPaths dataclass
 ├── pyproject.toml
 └── .env.example
 ```
@@ -59,7 +61,8 @@ The translate stage must preserve **exact SRT block indices and timestamp lines*
 |---|---|---|
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
 | `WHISPER_MODEL` | `large-v3` | Faster-Whisper model size |
-| `TTS_ENGINE` | `edge` | `coqui` or `edge` |
+| `OLLAMA_MODEL` | `qwen2.5-coder` | Ollama model |
+| `TTS_ENGINE` | `edge` | `edge` (cloud) or `kokoro` (local) |
 
 ## Testing
 
