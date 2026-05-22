@@ -186,5 +186,16 @@ def voices(
         console.print(f"\n[dim]Uso: --voice NombreDeVoz[/]  ej: [bold]--voice {result[0]['ShortName'] if result else 'es-ES-AlvaroNeural'}[/]")
 
 
+@app.command()
+def serve(
+    port: int = typer.Option(7860, "--port", "-p", help="Puerto del servidor web"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host (0.0.0.0 para acceso en red local)"),
+):
+    """Lanzar la interfaz web."""
+    import uvicorn
+    console.print(Panel(f"[bold cyan]agente_traductor_video[/] · interfaz web\nhttp://{host}:{port}"))
+    uvicorn.run("web:app", host=host, port=port, reload=False)
+
+
 if __name__ == "__main__":
     app()
