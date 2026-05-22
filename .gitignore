@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Env secrets
+.env
+
+# Claude personal config
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Ruff cache
+.ruff_cache/
+
+# Videos y archivos generados por el pipeline
+*.mkv
+*.mp4
+*.mp3
+*_tts/
+*_translated.srt

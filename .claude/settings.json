@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -NonInteractive -Command \"$f = ($input | ConvertFrom-Json).tool_input.file_path; if ($f -match '\\.py$') { uvx ruff format $f 2>$null }\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
