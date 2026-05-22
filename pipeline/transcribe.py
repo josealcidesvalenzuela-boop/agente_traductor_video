@@ -11,7 +11,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 _console = Console()
 
 
-def transcribe(video_path: str, language: str | None = None) -> str:
+def transcribe(video_path: str, language: str | None = None, output_path: str | None = None) -> str:
     """Transcribe video/audio to SRT using Faster-Whisper. Returns SRT path."""
     model_name = os.getenv("WHISPER_MODEL", "large-v3")
     t0 = time.time()
@@ -49,8 +49,8 @@ def transcribe(video_path: str, language: str | None = None) -> str:
             prog.update(t_seg, description=f"Transcribiendo…  {len(subs)} segmentos")
         prog.update(t_seg, description=f"[green]{len(subs)} segmentos detectados (idioma={info.language})")
 
-    output_path = Path(video_path).with_suffix(".srt")
-    output_path.write_text(srt.compose(subs), encoding="utf-8")
+    out = Path(output_path) if output_path else Path(video_path).with_suffix(".srt")
+    out.write_text(srt.compose(subs), encoding="utf-8")
     elapsed = time.time() - t0
-    _console.print(f"  → [bold]{output_path.name}[/] ({elapsed:.1f}s)")
-    return str(output_path)
+    _console.print(f"  → [bold]{out.name}[/] ({elapsed:.1f}s)")
+    return str(out)

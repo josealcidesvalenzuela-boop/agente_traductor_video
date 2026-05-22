@@ -56,15 +56,24 @@ async def _synthesize(text: str, voice: str, path: str) -> None:
     await communicate.save(path)
 
 
+async def list_voices(lang_filter: str | None = None) -> list[dict]:
+    """Return Edge-TTS voices, optionally filtered by language prefix (e.g. 'es', 'en-US')."""
+    voices = await edge_tts.list_voices()
+    if lang_filter:
+        voices = [v for v in voices if v["Locale"].lower().startswith(lang_filter.lower())]
+    return voices
+
+
 def generate_audio(
     srt_path: str,
     target_lang: str = "en",
     output_dir: str | None = None,
+    voice: str | None = None,
 ) -> list[tuple[float, str]]:
     """Generate one speed-adjusted MP3 per subtitle segment. Returns (start_sec, path) list."""
     path = Path(srt_path)
     subs = list(srt_lib.parse(path.read_text(encoding="utf-8")))
-    voice = _VOICES.get(target_lang, "en-US-JennyNeural")
+    voice = voice or _VOICES.get(target_lang, "en-US-JennyNeural")
 
     out_dir = Path(output_dir) if output_dir else path.parent / f"{path.stem}_tts"
     out_dir.mkdir(parents=True, exist_ok=True)

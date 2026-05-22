@@ -46,6 +46,7 @@ def translate(
     target_lang: str = "en",
     tone: str = "neutral",
     domain: str = "general",
+    output_path: str | None = None,
 ) -> str:
     """Translate SRT preserving all indices and timestamps. Returns translated SRT path."""
     path = Path(srt_path)
@@ -68,7 +69,7 @@ def translate(
                 sub.content = text
             prog.advance(task)
 
-    output_path = path.with_stem(path.stem + "_translated")
-    output_path.write_text(srt.compose(subs), encoding="utf-8")
-    print(f"  → {output_path.name}")
-    return str(output_path)
+    out = Path(output_path) if output_path else path.with_stem(path.stem + "_translated")
+    out.write_text(srt.compose(subs), encoding="utf-8")
+    print(f"  → {out.name}")
+    return str(out)
