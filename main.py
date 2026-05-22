@@ -51,7 +51,8 @@ def run(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Ruta del video de salida"),
     tone: str = typer.Option("neutral", "--tone", help="Tono de traducción: neutral | formal | informal"),
     domain: str = typer.Option("general", "--domain", help="Dominio del contenido: general | technical | casual"),
-    voice: Optional[str] = typer.Option(None, "--voice", help="Voz Edge-TTS explícita (ej: es-ES-AlvaroNeural). Ver: main.py voices"),
+    engine: Optional[str] = typer.Option(None, "--engine", help="Motor TTS: edge (nube) | kokoro (local). Default: env TTS_ENGINE o 'edge'"),
+    voice: Optional[str] = typer.Option(None, "--voice", help="Voz explícita para el motor seleccionado. Ver: main.py voices"),
     force: bool = typer.Option(False, "--force", "-f", help="Reejecutar etapas aunque los archivos ya existan"),
 ):
     """Transcribe → Traduce → Sintetiza voz → Dobla el video."""
@@ -104,16 +105,18 @@ def run(
     if only in (None, "tts"):
         console.print("\n[bold yellow]▶ Etapa 3/4[/]  Síntesis de voz (Edge-TTS)…")
         tts_dir = out["tts_dir"]
-        if resume and tts_dir.exists() and any(tts_dir.glob("seg_*.mp3")):
+        cached_segs = list(tts_dir.glob("seg_*.mp3")) + list(tts_dir.glob("seg_*.wav")) if tts_dir.exists() else []
+        if resume and cached_segs:
             console.print(f"  [dim]↩ Reutilizando {tts_dir.name}/ (--force para reejecutar)[/]")
             import srt as srt_lib
             subs = list(srt_lib.parse(Path(srt_for_tts).read_text(encoding="utf-8")))
+            ext = "wav" if cached_segs[0].suffix == ".wav" else "mp3"
             audio_segments = [
-                (sub.start.total_seconds(), str(tts_dir / f"seg_{sub.index:04d}.mp3"))
+                (sub.start.total_seconds(), str(tts_dir / f"seg_{sub.index:04d}.{ext}"))
                 for sub in subs
             ]
         else:
-            audio_segments = generate_audio(srt_for_tts, target_lang=target, voice=voice, output_dir=str(tts_dir))
+            audio_segments = generate_audio(srt_for_tts, target_lang=target, voice=voice, engine=engine, output_dir=str(tts_dir))
         if only == "tts":
             console.print(f"[green]✓[/] {len(audio_segments)} segmentos generados")
             return
@@ -130,19 +133,35 @@ def run(
 @app.command()
 def voices(
     lang: Optional[str] = typer.Argument(None, help="Filtrar por idioma (ej: es, en-US, fr)"),
+    engine: str = typer.Option("edge", "--engine", help="Motor: edge | kokoro"),
 ):
-    """Lista las voces Edge-TTS disponibles."""
+    """Lista las voces disponibles del motor TTS seleccionado."""
     import asyncio
-    from pipeline.tts import list_voices
     from rich.table import Table
 
-    result = asyncio.run(list_voices(lang))
-    table = Table("Nombre", "Género", "Locale", title=f"Voces Edge-TTS{f' [{lang}]' if lang else ''}")
-    for v in sorted(result, key=lambda x: x["Locale"]):
-        gender = "[cyan]♂[/]" if v["Gender"] == "Male" else "[magenta]♀[/]"
-        table.add_row(v["ShortName"], gender, v["Locale"])
-    console.print(table)
-    console.print(f"\n[dim]Uso: --voice NombreDeVoz[/]  ej: [bold]--voice {result[0]['ShortName'] if result else 'es-ES-AlvaroNeural'}[/]")
+    if engine == "kokoro":
+        from pipeline.tts import _KokoroEngine
+
+        eng = _KokoroEngine()
+        model = eng._get_model()
+        names = model.get_voices()
+        if lang:
+            names = [n for n in names if n.startswith(lang.replace("-", "_").lower())]
+        table = Table("Nombre", "Prefijo de idioma", title=f"Voces Kokoro{f' [{lang}]' if lang else ''}")
+        for n in names:
+            prefix = n.split("_")[0]
+            table.add_row(n, prefix)
+        console.print(table)
+        console.print(f"\n[dim]Uso: --engine kokoro --voice NombreDeVoz[/]  ej: [bold]--engine kokoro --voice {names[0] if names else 'af_bella'}[/]")
+    else:
+        from pipeline.tts import list_voices
+        result = asyncio.run(list_voices(lang))
+        table = Table("Nombre", "Género", "Locale", title=f"Voces Edge-TTS{f' [{lang}]' if lang else ''}")
+        for v in sorted(result, key=lambda x: x["Locale"]):
+            gender = "[cyan]♂[/]" if v["Gender"] == "Male" else "[magenta]♀[/]"
+            table.add_row(v["ShortName"], gender, v["Locale"])
+        console.print(table)
+        console.print(f"\n[dim]Uso: --voice NombreDeVoz[/]  ej: [bold]--voice {result[0]['ShortName'] if result else 'es-ES-AlvaroNeural'}[/]")
 
 
 if __name__ == "__main__":
