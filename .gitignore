@@ -19,9 +19,9 @@ CLAUDE.local.md
 # Ruff cache
 .ruff_cache/
 
-# Videos y archivos generados por el pipeline
+# Videos de entrada (no commitear archivos pesados)
 *.mkv
 *.mp4
-*.mp3
-*_tts/
-*_translated.srt
+
+# Todo lo generado por el pipeline
+salida/

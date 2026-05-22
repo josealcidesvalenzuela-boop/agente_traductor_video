@@ -30,7 +30,13 @@ agente_traductor_video/
 ├── config.py            # All env var defaults (single source of truth)
 ├── main.py              # CLI entrypoint (Typer) + RunPaths dataclass
 ├── pyproject.toml
-└── .env.example
+├── .env.example
+└── salida/              # Generated output (gitignored)
+    └── video_YYYYMMDD_HHMMSS/
+        ├── transcription.srt
+        ├── translated.srt
+        ├── tts/
+        └── dubbed.mp4
 ```
 
 ## Commands

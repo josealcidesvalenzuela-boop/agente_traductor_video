@@ -19,9 +19,12 @@ console = Console()
 
 # ── Run path management ───────────────────────────────────────────────────────
 
+_OUTPUT_DIR = Path("salida")
+
 
 @dataclass
 class RunPaths:
+    run_dir: Path
     srt: Path
     translated_srt: Path
     tts_dir: Path
@@ -29,27 +32,29 @@ class RunPaths:
 
 
 def _make_run_paths(video: Path, run_id: str) -> RunPaths:
-    p, s = video.parent, video.stem
+    run_dir = _OUTPUT_DIR / f"{video.stem}_{run_id}"
     return RunPaths(
-        srt=p / f"{s}_{run_id}.srt",
-        translated_srt=p / f"{s}_{run_id}_translated.srt",
-        tts_dir=p / f"{s}_{run_id}_tts",
-        dubbed=p / f"{s}_{run_id}_dubbed.mp4",
+        run_dir=run_dir,
+        srt=run_dir / "transcription.srt",
+        translated_srt=run_dir / "translated.srt",
+        tts_dir=run_dir / "tts",
+        dubbed=run_dir / "dubbed.mp4",
     )
 
 
 def _find_latest_run(video: Path) -> RunPaths | None:
-    """Return output paths of the most recent run for this video, or None."""
-    dubbed_files = sorted(
-        video.parent.glob(f"{video.stem}_*_dubbed.mp4"),
-        key=lambda f: f.stat().st_mtime,
+    """Return paths of the most recent run for this video, or None."""
+    if not _OUTPUT_DIR.exists():
+        return None
+    candidates = sorted(
+        [d for d in _OUTPUT_DIR.glob(f"{video.stem}_*") if d.is_dir()],
+        key=lambda d: d.stat().st_mtime,
         reverse=True,
     )
-    if not dubbed_files:
+    if not candidates:
         return None
-    inner = dubbed_files[0].stem[len(video.stem) + 1:]   # "20260522_143500_dubbed"
-    run_id = inner[: inner.rfind("_dubbed")]               # "20260522_143500"
-    return _make_run_paths(video, run_id) if run_id else None
+    run_id = candidates[0].name[len(video.stem) + 1:]
+    return _make_run_paths(video, run_id)
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -72,7 +77,6 @@ def run(
     """Transcribe → Traduce → Sintetiza voz → Dobla el video."""
     t_start = time.time()
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    console.print(Panel(f"[bold cyan]agente_traductor_video[/]\n{video.name}  ·  {source} → {target}  ·  run [dim]{run_id}[/]"))
 
     from pipeline.transcribe import transcribe
     from pipeline.translate import translate
@@ -81,6 +85,13 @@ def run(
 
     resume = not force and _find_latest_run(video)
     out = resume or _make_run_paths(video, run_id)
+    out.run_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(Panel(
+        f"[bold cyan]agente_traductor_video[/]\n"
+        f"{video.name}  ·  {source} → {target}  ·  run [dim]{run_id}[/]\n"
+        f"[dim]salida → {out.run_dir}[/]"
+    ))
     srt_path: str | None = str(srt) if srt else None
 
     # Etapa 1 — Transcripción
